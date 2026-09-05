@@ -19,11 +19,23 @@ enum InvocationResult: Sendable, Equatable {
     case failed(String)
 }
 
+enum AccessibilityActionSelection {
+    static func preferredAction(in actions: [String]) -> String? {
+        [kAXPressAction as String, kAXShowMenuAction as String]
+            .first(where: actions.contains)
+    }
+}
+
+private struct InvocationTarget {
+    let element: AXUIElement
+    let action: String?
+}
+
 /// AXUIElement is a Core Foundation reference without Sendable conformance.
 /// All element access and storage is isolated to this scanner's serial queue.
 final class AccessibilityScanner: @unchecked Sendable {
     private let queue = DispatchQueue(label: "io.jonsson.NotchShelf.accessibility")
-    private var elementsByID: [UUID: AXUIElement] = [:]
+    private var targetsByID: [UUID: InvocationTarget] = [:]
 
     func discover(in candidates: [ProcessCandidate]) async -> ScanResult {
         await withCheckedContinuation { continuation in
@@ -43,12 +55,12 @@ final class AccessibilityScanner: @unchecked Sendable {
 
     private func scan(_ candidates: [ProcessCandidate]) -> ScanResult {
         guard AXIsProcessTrusted() else {
-            elementsByID = [:]
+            targetsByID = [:]
             return ScanResult(items: [], applicationsScanned: 0, inaccessibleApplications: 0)
         }
 
         var discovered: [MenuBarItem] = []
-        var newElements: [UUID: AXUIElement] = [:]
+        var newTargets: [UUID: InvocationTarget] = [:]
         var inaccessibleCount = 0
 
         for candidate in candidates {
@@ -82,8 +94,7 @@ final class AccessibilityScanner: @unchecked Sendable {
                 let mark = stringAttribute(element, kAXMenuItemMarkCharAttribute)
                 let enabled = boolAttribute(element, kAXEnabledAttribute) ?? true
                 let actions = actionNames(for: element)
-                let canInvoke = actions.contains(kAXPressAction as String)
-                    || actions.contains(kAXShowMenuAction as String)
+                let action = AccessibilityActionSelection.preferredAction(in: actions)
                 let label = MenuBarItemPresentation.firstUsefulLabel(
                     [title, description, help],
                     fallback: "\(candidate.name) menu item"
@@ -102,15 +113,15 @@ final class AccessibilityScanner: @unchecked Sendable {
                     ),
                     help: help == label ? nil : help,
                     isEnabled: enabled,
-                    canInvoke: canInvoke
+                    canInvoke: action != nil
                 )
 
                 discovered.append(item)
-                newElements[id] = element
+                newTargets[id] = InvocationTarget(element: element, action: action)
             }
         }
 
-        elementsByID = newElements
+        targetsByID = newTargets
         return ScanResult(
             items: deduplicate(discovered),
             applicationsScanned: candidates.count,
@@ -119,18 +130,15 @@ final class AccessibilityScanner: @unchecked Sendable {
     }
 
     private func performInvocation(itemID: UUID) -> InvocationResult {
-        guard let element = elementsByID[itemID] else {
+        guard let target = targetsByID[itemID] else {
             return .failed("This item changed. Refresh the list and try again.")
         }
 
-        let actions = actionNames(for: element)
-        let preferredActions = [kAXPressAction as String, kAXShowMenuAction as String]
-
-        guard let action = preferredActions.first(where: actions.contains) else {
+        guard let action = target.action else {
             return .failed("macOS exposes this item, but not an action NotchShelf can perform.")
         }
 
-        let result = AXUIElementPerformAction(element, action as CFString)
+        let result = AXUIElementPerformAction(target.element, action as CFString)
         switch result {
         case .success:
             return .succeeded

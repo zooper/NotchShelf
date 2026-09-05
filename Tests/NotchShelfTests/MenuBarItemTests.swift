@@ -48,6 +48,18 @@ final class MenuBarItemTests: XCTestCase {
         )
     }
 
+    func testPreferredAccessibilityActionIsSelectedDuringDiscovery() {
+        XCTAssertEqual(
+            AccessibilityActionSelection.preferredAction(in: ["AXShowMenu", "AXPress"]),
+            "AXPress"
+        )
+        XCTAssertEqual(
+            AccessibilityActionSelection.preferredAction(in: ["AXShowMenu"]),
+            "AXShowMenu"
+        )
+        XCTAssertNil(AccessibilityActionSelection.preferredAction(in: ["AXCancel"]))
+    }
+
     private func makeItem(
         label: String = "VPN",
         app: String = "Client",
